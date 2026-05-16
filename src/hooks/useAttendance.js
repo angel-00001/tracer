@@ -1,85 +1,89 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 
+const ATTENDANCE_KEY = ['attendance'];
+
+const fetchAttendance = async () => {
+  const { data, error } = await supabase
+    .from('attendance')
+    .select('*')
+    .order('date', { ascending: false });
+  if (error) throw error;
+  return data || [];
+};
+
 export const useAttendance = () => {
-  const [attendance, setAttendance] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [syncing, setSyncing] = useState({});
+  const queryClient = useQueryClient();
+  const [syncingKeys, setSyncingKeys] = useState({});
 
-  const fetchAttendance = async () => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('attendance')
-        .select('*')
-        .order('date', { ascending: false });
-      
-      if (error) throw error;
-      setAttendance(data || []);
-    } catch (err) {
-      setError(err.message);
-      console.error('Error fetching attendance:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const query = useQuery({
+    queryKey: ATTENDANCE_KEY,
+    queryFn: fetchAttendance,
+  });
 
-  const markAttendance = async (courseCode, date, status) => {
-    const syncKey = `${courseCode}-${date}`;
-    
-    // Optimistic update
-    setAttendance(prev => {
-      const filtered = prev.filter(a => !(a.course_code === courseCode && a.date === date));
-      if (status) {
-        return [...filtered, { course_code: courseCode, date, status }];
-      }
-      return filtered;
-    });
+  const markMutation = useMutation({
+    mutationFn: async ({ courseCode, date, status }) => {
+      const { data: { user } } = await supabase.auth.getUser();
 
-    // Show subtle loader
-    setSyncing(prev => ({ ...prev, [syncKey]: true }));
-
-    try {
       if (status) {
         const { error } = await supabase
           .from('attendance')
-          .upsert({ course_code: courseCode, date, status }, { onConflict: 'course_code,date' });
+          .upsert(
+            { course_code: courseCode, date, status, user_id: user.id },
+            { onConflict: 'course_code,date,user_id' }
+          );
         if (error) throw error;
       } else {
         const { error } = await supabase
           .from('attendance')
           .delete()
-          .match({ course_code: courseCode, date });
+          .match({ course_code: courseCode, date, user_id: user.id });
         if (error) throw error;
       }
-      
-      return { success: true };
-    } catch (err) {
-      setError(err.message);
-      console.error('Error marking attendance:', err);
-      // Revert on error
-      await fetchAttendance();
-      return { success: false, error: err.message };
-    } finally {
-      setSyncing(prev => {
-        const updated = { ...prev };
-        delete updated[syncKey];
-        return updated;
-      });
-    }
-  };
+    },
+    onMutate: async ({ courseCode, date, status }) => {
+      const key = `${courseCode}-${date}`;
+      setSyncingKeys(prev => ({ ...prev, [key]: true }));
 
-  useEffect(() => {
-    fetchAttendance();
-  }, []);
+      await queryClient.cancelQueries({ queryKey: ATTENDANCE_KEY });
+      const previous = queryClient.getQueryData(ATTENDANCE_KEY);
+
+      queryClient.setQueryData(ATTENDANCE_KEY, (old) => {
+        const filtered = (old || []).filter(
+          (a) => !(a.course_code === courseCode && a.date === date)
+        );
+        if (status) {
+          return [...filtered, { course_code: courseCode, date, status }];
+        }
+        return filtered;
+      });
+
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      queryClient.setQueryData(ATTENDANCE_KEY, context.previous);
+    },
+    onSettled: (_data, _err, { courseCode, date }) => {
+      const key = `${courseCode}-${date}`;
+      setSyncingKeys(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      queryClient.invalidateQueries({ queryKey: ATTENDANCE_KEY });
+    },
+  });
+
+  const markAttendance = (courseCode, date, status) =>
+    markMutation.mutateAsync({ courseCode, date, status });
 
   return {
-    attendance,
-    loading,
-    error,
-    syncing,
+    attendance: query.data || [],
+    loading: query.isLoading,
+    error: query.error?.message || null,
+    syncing: syncingKeys,
     markAttendance,
-    refetch: fetchAttendance
+    refetch: query.refetch,
   };
 };

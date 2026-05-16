@@ -1,39 +1,43 @@
 import React, { useState } from 'react';
-import { Check, X, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
-import { 
-  calculateAttendanceStats, 
-  getTodayAttendanceStatus, 
+import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  STATUS_CONFIG,
+  getTodayAttendanceStatus,
   getWeekdaysInRange,
-  formatDate 
+  formatDate
 } from '../utils/calculations';
+
+const MENU_ITEMS = [
+  { status: 'present', emoji: '✅', label: 'Present' },
+  { status: 'extra_class', emoji: '➕', label: 'Extra Class' },
+  { status: 'absent', emoji: '❌', label: 'Absent' },
+  { status: 'holiday', emoji: '🏖️', label: 'Holiday' },
+  { status: 'cancelled', emoji: '🚫', label: 'Cancelled' },
+  { status: null, emoji: '✕', label: 'Clear', danger: true },
+];
 
 export const CalendarView = ({ courses, attendance, onMarkAttendance, syncing }) => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  
+  const [openCell, setOpenCell] = useState(null); // `${courseCode}-${date}`
+
   const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
   const endOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
-  
+
   const weekdays = getWeekdaysInRange(
     startOfMonth.toISOString().split('T')[0],
     endOfMonth.toISOString().split('T')[0]
   );
 
-  const handlePrevMonth = () => {
+  const handlePrevMonth = () =>
     setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
-  };
 
-  const handleNextMonth = () => {
+  const handleNextMonth = () =>
     setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1));
-  };
 
-  const handleCellClick = (courseCode, date, currentStatus) => {
-    if (currentStatus === 'present') {
-      onMarkAttendance(courseCode, date, 'absent');
-    } else if (currentStatus === 'absent') {
-      onMarkAttendance(courseCode, date, null);
-    } else {
-      onMarkAttendance(courseCode, date, 'present');
-    }
+  const handleSelect = (courseCode, date, status) => {
+    onMarkAttendance(courseCode, date, status);
+    setOpenCell(null);
   };
 
   return (
@@ -41,19 +45,13 @@ export const CalendarView = ({ courses, attendance, onMarkAttendance, syncing })
       <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
         <h2 className="text-sm font-medium text-gray-700">Calendar View</h2>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handlePrevMonth}
-            className="p-1 hover:bg-gray-200 rounded transition-colors"
-          >
+          <button onClick={handlePrevMonth} className="p-1 hover:bg-gray-200 rounded transition-colors">
             <ChevronLeft size={18} />
           </button>
           <span className="text-sm font-medium text-gray-700 min-w-[120px] text-center">
             {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
           </span>
-          <button
-            onClick={handleNextMonth}
-            className="p-1 hover:bg-gray-200 rounded transition-colors"
-          >
+          <button onClick={handleNextMonth} className="p-1 hover:bg-gray-200 rounded transition-colors">
             <ChevronRight size={18} />
           </button>
         </div>
@@ -80,31 +78,49 @@ export const CalendarView = ({ courses, attendance, onMarkAttendance, syncing })
                   <div className="text-xs font-medium text-gray-900">{course.code}</div>
                 </td>
                 {weekdays.map(date => {
+                  const cellKey = `${course.code}-${date}`;
                   const status = getTodayAttendanceStatus(attendance, course.code, date);
-                  const isSyncing = syncing[`${course.code}-${date}`];
-                  
+                  const isSyncing = syncing[cellKey];
+                  const cfg = status ? STATUS_CONFIG[status] : null;
+
                   return (
                     <td key={date} className="py-1 px-1">
-                      <button
-                        onClick={() => handleCellClick(course.code, date, status)}
-                        disabled={isSyncing}
-                        className={`relative w-full h-8 rounded flex items-center justify-center transition-all ${
-                          status === 'present' 
-                            ? 'bg-green-100 hover:bg-green-200 text-green-700' 
-                            : status === 'absent'
-                            ? 'bg-red-100 hover:bg-red-200 text-red-700'
-                            : 'hover:bg-gray-100 border border-gray-200'
-                        }`}
+                      <Popover
+                        open={openCell === cellKey}
+                        onOpenChange={open => setOpenCell(open ? cellKey : null)}
                       >
-                        {isSyncing ? (
-                          <Loader2 size={14} className="animate-spin text-gray-400" />
-                        ) : (
-                          <>
-                            {status === 'present' && <Check size={14} />}
-                            {status === 'absent' && <X size={14} />}
-                          </>
-                        )}
-                      </button>
+                        <PopoverTrigger asChild>
+                          <button
+                            disabled={isSyncing}
+                            className={`w-full h-8 rounded flex items-center justify-center text-xs transition-all focus:outline-none
+                              ${cfg
+                                ? `${cfg.bg} ${cfg.hoverBg} ${cfg.color}`
+                                : 'hover:bg-gray-100 border border-gray-200'
+                              }`}
+                          >
+                            {isSyncing
+                              ? <Loader2 size={12} className="animate-spin text-gray-400" />
+                              : cfg ? cfg.emoji : null
+                            }
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-44 p-1" align="center" sideOffset={4}>
+                          {MENU_ITEMS.map(({ status: s, emoji, label, danger }) => (
+                            <button
+                              key={label}
+                              onClick={() => handleSelect(course.code, date, s)}
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left rounded-md transition-colors
+                                ${status === s ? 'bg-gray-100 font-semibold' : 'hover:bg-gray-50'}
+                                ${danger ? 'text-red-500' : 'text-gray-700'}
+                              `}
+                            >
+                              <span>{emoji}</span>
+                              <span>{label}</span>
+                              {status === s && <span className="ml-auto text-gray-400 text-xs">✓</span>}
+                            </button>
+                          ))}
+                        </PopoverContent>
+                      </Popover>
                     </td>
                   );
                 })}
